@@ -1,4 +1,4 @@
-## Primitives:
+# Primitives
 
 - `prim.c` contains Windows primitives for OS allocation.
 
@@ -9,9 +9,11 @@
 
 - `etw-mimalloc.wprp` is a profile for the Windows Performance Recorder (WPR).
   In an admin prompt, you can use:
-  ```
+
+  ```txt
   > wpr -start src\prim\windows\etw-mimalloc.wprp -filemode
   > <my mimalloc program>
   > wpr -stop test.etl
-  ``` 
+  ```
+
   and then open `test.etl` in the Windows Performance Analyzer (WPA).
