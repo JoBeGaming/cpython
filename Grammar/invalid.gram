@@ -44,6 +44,7 @@ expression_without_invalid[expr_ty]:
     | disjunction
     | lambdef
 invalid_legacy_expression:
+    # TODO: FIX... ALSO FIX SHIT WITH arr[] ONLY GIVING RAW SYNTAX ERROR LIKE WTF
     | a=NAME !'(' b=star_expressions {
         _PyPegen_check_legacy_stmt(p, a) ? RAISE_SYNTAX_ERROR_KNOWN_RANGE(a, b,
             "Missing parentheses in call to '%U'. Did you mean %U(...)?", a->v.Name.id, a->v.Name.id) : NULL}
@@ -72,7 +73,7 @@ invalid_expression:
    | a=disjunction 'if' b=disjunction 'else' !expression {
         RAISE_SYNTAX_ERROR_ON_NEXT_TOKEN("expected expression after 'else', but statement is given") }
    | a[stmt_ty]=(pass_stmt|break_stmt|continue_stmt) 'if' b=disjunction 'else' c=simple_stmt {
-        RAISE_SYNTAX_ERROR_KNOWN_LOCATION (a, "expected expression before 'if', but statement is given") }
+        RAISE_SYNTAX_ERROR_KNOWN_LOCATION(a, "expected expression before 'if', but statement is given") }
    | a='lambda' [lambda_params] b=':' &FSTRING_MIDDLE  {
         RAISE_SYNTAX_ERROR_KNOWN_RANGE(a, b, "f-string: lambda expressions are not allowed without parentheses") }
    | a='lambda' [lambda_params] b=':' &TSTRING_MIDDLE  {
@@ -145,6 +146,7 @@ invalid_assert_stmt:
         RAISE_SYNTAX_ERROR_KNOWN_RANGE(
             a, b,
             "cannot use named expression without parentheses here") }
+    | 'assert' a=expression !',' b=expression { RAISE_SYNTAX_ERROR_KNOWN_LOCATION(b, "did you forget a comma?") }
 invalid_block:
     | NEWLINE !INDENT { RAISE_INDENTATION_ERROR("expected an indented block") }
 invalid_comprehension:
@@ -172,16 +174,37 @@ invalid_parameters:
         RAISE_SYNTAX_ERROR_KNOWN_LOCATION(a, "expected comma between / and *") }
 invalid_default:
     | a='=' &(')'|',') { RAISE_SYNTAX_ERROR_KNOWN_LOCATION(a, "expected default value expression") }
+    | '=' a='*' { RAISE_ERROR_KNOWN_LOCATION(a, "parameter default cannot be starred expression") }
+    | '=' a='**' { RAISE_ERROR_KNOWN_LOCATION(a, "parameter default cannot be dict unpacking") }
 invalid_star_etc:
     | a='*' (')' | ',' (')' | '**')) { RAISE_SYNTAX_ERROR_KNOWN_LOCATION(a, "named parameters must follow bare *") }
     | '*' ',' TYPE_COMMENT { RAISE_SYNTAX_ERROR("bare * has associated type comment") }
     | '*' param a='=' { RAISE_SYNTAX_ERROR_KNOWN_LOCATION(a, "var-positional parameter cannot have default value") }
-    | '*' (param_no_default | ',') param_maybe_default* a='*' (param_no_default | ',') {
+    # Doesn't work for:
+    #     def fn(a, *, *args): ...
+    # where better error might be
+    #     var-positional parameter may not appear after *
+    # Also:
+    #     def fn(a, **, b): ...
+    # All point to the char after ** and don't say anything specific.
+
+    | '*' (param_no_default | ',') param_maybe_default* a='*' (param_no_default | ',' | ')') {
         RAISE_SYNTAX_ERROR_KNOWN_LOCATION(a, "* may appear only once") }
 invalid_kwds:
     | '**' param a='=' { RAISE_SYNTAX_ERROR_KNOWN_LOCATION(a, "var-keyword parameter cannot have default value") }
+    # Special-case var-keyword parameter followed by var-positional parameter
+    # TODO: make prev case in * section so that you cant do *args, **kwargs *args2
+    | '**' a=param ',' b='*' c=param { RAISE_SYNTAX_ERROR_KNOWN_RANGE(b, c, "var-positional parameter cannot follow var-keyword parameter. Perhaps you meant '*%s, **%s' instead?") }
+    | '**' a=param ',' param* b='*' c=param {} # TODO: THIS ONE
+    # Similar to the last case of invalid_star_etc
+    | '**' param ',' a='**' b=param { RAISE_SYNTAX_ERROR_KNOWN_RANGE(a, b, "** may appear only once") }
     | '**' param ',' a=param { RAISE_SYNTAX_ERROR_KNOWN_LOCATION(a, "parameters cannot follow var-keyword parameter") }
-    | '**' param ',' a[Token*]=('*'|'**'|'/') { RAISE_SYNTAX_ERROR_KNOWN_LOCATION(a, "parameters cannot follow var-keyword parameter") }
+    | '**' param ',' a[Token*]=('*'|'/') { RAISE_SYNTAX_ERROR_KNOWN_LOCATION(a, "parameters cannot follow var-keyword parameter") }
+    # Var-keyword specifier and parameter, but seperated by comma. Suggest removing the comma.
+    # DEBUG: b is of type arg_ty (see pycore_ast.h).
+    | '**' a=',' b=param { RAISE_SYNTAX_ERROR_KNOWN_LOCATION(
+        a, "var-keyword parameter seperated by comma. Did you mean '**%s' instead?", b->arg) }
+    | a='**' !param { RAISE_SYNTAX_ERROR_KNOWN_LOCATION(a, "expected parameter name after **") }
 invalid_parameters_helper: # This is only there to avoid type errors
     | a=slash_with_default { _PyPegen_singleton_seq(p, a) }
     | param_with_default+
@@ -209,6 +232,7 @@ invalid_lambda_star_etc:
 invalid_lambda_kwds:
     | '**' lambda_param a='=' { RAISE_SYNTAX_ERROR_KNOWN_LOCATION(a, "var-keyword parameter cannot have default value") }
     | '**' lambda_param ',' a=lambda_param { RAISE_SYNTAX_ERROR_KNOWN_LOCATION(a, "parameters cannot follow var-keyword parameter") }
+    # TODO: DO WE REQUIRE FIX FROM ABOVE HERE TOO?
     | '**' lambda_param ',' a[Token*]=('*'|'**'|'/') { RAISE_SYNTAX_ERROR_KNOWN_LOCATION(a, "parameters cannot follow var-keyword parameter") }
 invalid_double_type_comments:
     | TYPE_COMMENT NEWLINE TYPE_COMMENT NEWLINE INDENT {
@@ -340,6 +364,8 @@ invalid_else_stmt:
     | a='else' ':' NEWLINE !INDENT {
         RAISE_INDENTATION_ERROR("expected an indented block after 'else' statement on line %d", a->lineno) }
     | 'else' ':' block 'elif' { RAISE_SYNTAX_ERROR("'elif' block follows an 'else' block")}
+    # Special-case else with if following. Users of other languages may confuse it with elif.
+    | a='else' b='if' ':' block { RAISE_SYNTAX_ERROR_KNOWN_RANGE(a, b, "invalid syntax. Did you mean 'elif' instead?") }
 invalid_while_stmt:
     | 'while' named_expression NEWLINE { RAISE_SYNTAX_ERROR("expected ':'") }
     | a='while' named_expression ':' NEWLINE !INDENT {

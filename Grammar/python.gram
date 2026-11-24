@@ -354,8 +354,9 @@ kwds[arg_ty]:
 
 # One parameter.  This *includes* a following comma and type comment.
 #
-# There are three styles:
+# There are four styles:
 # - No default
+# - No default with star-annotation
 # - With default
 # - Maybe with default
 #
